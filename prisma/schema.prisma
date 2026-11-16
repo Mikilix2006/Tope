@@ -1,0 +1,408 @@
+// Tope — esquema de datos.
+// Núcleo compartido: usuario, perfil, medidas, objetivos, calendario y control de acceso.
+// Un módulo por disciplina (fuerza, calistenia, CrossFit), cada uno con sus propias tablas al final del archivo.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Discipline {
+  CALISTENIA
+  CROSSFIT
+  FUERZA
+}
+
+enum Level {
+  PRINCIPIANTE
+  INTERMEDIO
+  AVANZADO
+}
+
+enum Equipment {
+  SIN_MATERIAL
+  MANCUERNAS
+  GIMNASIO
+}
+
+enum GoalDifficulty {
+  FACIL
+  MEDIO
+  DIFICIL
+}
+
+// Métricas de ejercicio (PESO, REPETICIONES, TIEMPO, DISTANCIA) y de medida corporal (el resto).
+enum GoalMetric {
+  PESO
+  REPETICIONES
+  TIEMPO
+  DISTANCIA
+  PESO_CORPORAL
+  CINTURA
+  PECHO
+  CADERA
+  BRAZO
+  MUSLO
+}
+
+// Qué se mide en un ejercicio. Lo comparten los catálogos de los tres módulos (las tablas son independientes).
+enum ExerciseMetric {
+  PESO
+  REPETICIONES
+  TIEMPO
+  DISTANCIA
+  CALORIAS
+}
+
+model User {
+  id           String   @id @default(cuid())
+  email        String   @unique
+  passwordHash String
+  name         String
+  isDemo       Boolean  @default(false)
+  createdAt    DateTime @default(now())
+
+  profile      Profile?
+  measurements BodyMeasurement[]
+  goals        Goal[]
+  trainingDays TrainingDay[]
+
+  fuerzaExercises     FuerzaExercise[]
+  fuerzaRoutines      FuerzaRoutine[]
+  fuerzaSessions      FuerzaSession[]
+  calisteniaExercises CalisteniaExercise[]
+  calisteniaRoutines  CalisteniaRoutine[]
+  calisteniaSessions  CalisteniaSession[]
+  crossfitExercises   CrossfitExercise[]
+  crossfitRoutines    CrossfitRoutine[]
+  crossfitSessions    CrossfitSession[]
+}
+
+model Profile {
+  userId         String       @id
+  user           User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  age            Int?
+  disciplines    Discipline[]
+  level          Level?
+  daysPerWeek    Int?
+  sessionMinutes Int?
+  equipment      Equipment?
+  limitations    String?
+  // Se rellena al terminar el asistente de alta (fase 3).
+  onboardedAt    DateTime?
+  updatedAt      DateTime     @updatedAt
+}
+
+// Una fila por usuario y día; todos los campos son opcionales salvo la fecha.
+model BodyMeasurement {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  date      DateTime @db.Date
+  weightKg  Float?
+  heightCm  Float?
+  waistCm   Float?
+  chestCm   Float?
+  hipCm     Float?
+  armCm     Float?
+  thighCm   Float?
+  createdAt DateTime @default(now())
+
+  @@unique([userId, date])
+}
+
+// El valor actual, el progreso y el estado se calculan; no se guardan (fase 3).
+model Goal {
+  id           String         @id @default(cuid())
+  userId       String
+  user         User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  title        String
+  metric       GoalMetric
+  // Solo en objetivos de ejercicio: disciplina y id del ejercicio en el catálogo de ese módulo (sin FK, cada módulo tiene su tabla).
+  discipline   Discipline?
+  exerciseId   String?
+  difficulty   GoalDifficulty
+  startValue   Float
+  targetValue  Float
+  // true si el usuario cambió la meta sugerida: se respeta y no se recalcula.
+  targetEdited Boolean        @default(false)
+  deadline     DateTime?      @db.Date
+  createdAt    DateTime       @default(now())
+
+  @@index([userId])
+}
+
+// Calendario de constancia: los módulos marcan aquí cada día entrenado.
+model TrainingDay {
+  userId     String
+  user       User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  date       DateTime   @db.Date
+  discipline Discipline
+
+  @@id([userId, date, discipline])
+}
+
+// Intentos fallidos de inicio de sesión, para el límite de intentos.
+model LoginAttempt {
+  id        String   @id @default(cuid())
+  email     String
+  ip        String
+  createdAt DateTime @default(now())
+
+  @@index([email, createdAt])
+  @@index([ip, createdAt])
+}
+
+// ─── Módulo Fuerza ───────────────────────────────────────────────────────────────
+// Catálogo global (userId null, con slug) + ejercicios propios del usuario (userId, sin slug).
+model FuerzaExercise {
+  id        String         @id @default(cuid())
+  slug      String?        @unique
+  name      String
+  metric    ExerciseMetric
+  muscle    String?
+  equipment Equipment?
+  userId    String?
+  user      User?          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt DateTime       @default(now())
+
+  routineItems FuerzaRoutineItem[]
+  sets         FuerzaSet[]
+
+  @@index([userId])
+}
+
+model FuerzaRoutine {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name      String
+  notes     String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  items    FuerzaRoutineItem[]
+  sessions FuerzaSession[]
+
+  @@index([userId])
+}
+
+// Ejercicio planificado dentro de una rutina: número de series y objetivo por serie (opcional).
+model FuerzaRoutineItem {
+  id         String         @id @default(cuid())
+  routineId  String
+  routine    FuerzaRoutine  @relation(fields: [routineId], references: [id], onDelete: Cascade)
+  exerciseId String
+  exercise   FuerzaExercise @relation(fields: [exerciseId], references: [id], onDelete: Cascade)
+  position   Int
+  sets       Int
+  weightKg   Float?
+  reps       Int?
+  rpe        Float?
+
+  @@index([routineId])
+}
+
+model FuerzaSession {
+  id        String         @id @default(cuid())
+  userId    String
+  user      User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  routineId String?
+  routine   FuerzaRoutine? @relation(fields: [routineId], references: [id], onDelete: SetNull)
+  date      DateTime       @db.Date
+  notes     String?
+  createdAt DateTime       @default(now())
+
+  sets FuerzaSet[]
+
+  @@index([userId, date])
+}
+
+// Serie registrada. El dueño es el de la sesión (sin userId propio).
+model FuerzaSet {
+  id         String         @id @default(cuid())
+  sessionId  String
+  session    FuerzaSession  @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  exerciseId String
+  exercise   FuerzaExercise @relation(fields: [exerciseId], references: [id], onDelete: Cascade)
+  weightKg   Float
+  reps       Int
+  rpe        Float?
+
+  createdAt DateTime @default(now())
+
+  @@index([sessionId])
+  @@index([exerciseId])
+}
+
+// ─── Módulo Calistenia ───────────────────────────────────────────────────────────────
+// Catálogo global (userId null, con slug) + ejercicios propios del usuario (userId, sin slug).
+model CalisteniaExercise {
+  id        String         @id @default(cuid())
+  slug      String?        @unique
+  name      String
+  metric    ExerciseMetric
+  muscle    String?
+  equipment Equipment?
+  userId    String?
+  user      User?          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt DateTime       @default(now())
+
+  routineItems CalisteniaRoutineItem[]
+  sets         CalisteniaSet[]
+
+  @@index([userId])
+}
+
+model CalisteniaRoutine {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name      String
+  notes     String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  items    CalisteniaRoutineItem[]
+  sessions CalisteniaSession[]
+
+  @@index([userId])
+}
+
+// Ejercicio planificado dentro de una rutina: número de series y objetivo por serie (opcional).
+model CalisteniaRoutineItem {
+  id         String             @id @default(cuid())
+  routineId  String
+  routine    CalisteniaRoutine  @relation(fields: [routineId], references: [id], onDelete: Cascade)
+  exerciseId String
+  exercise   CalisteniaExercise @relation(fields: [exerciseId], references: [id], onDelete: Cascade)
+  position   Int
+  sets       Int
+  reps       Int?
+  seconds    Int?
+  weightKg   Float?
+
+  @@index([routineId])
+}
+
+model CalisteniaSession {
+  id        String             @id @default(cuid())
+  userId    String
+  user      User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  routineId String?
+  routine   CalisteniaRoutine? @relation(fields: [routineId], references: [id], onDelete: SetNull)
+  date      DateTime           @db.Date
+  notes     String?
+  createdAt DateTime           @default(now())
+
+  sets CalisteniaSet[]
+
+  @@index([userId, date])
+}
+
+// Serie registrada. El dueño es el de la sesión (sin userId propio).
+model CalisteniaSet {
+  id         String             @id @default(cuid())
+  sessionId  String
+  session    CalisteniaSession  @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  exerciseId String
+  exercise   CalisteniaExercise @relation(fields: [exerciseId], references: [id], onDelete: Cascade)
+  reps       Int?
+  seconds    Int?
+  weightKg   Float? // lastre
+
+  createdAt DateTime @default(now())
+
+  @@index([sessionId])
+  @@index([exerciseId])
+}
+
+// ─── Módulo Crossfit ───────────────────────────────────────────────────────────────
+// Catálogo global (userId null, con slug) + ejercicios propios del usuario (userId, sin slug).
+model CrossfitExercise {
+  id        String         @id @default(cuid())
+  slug      String?        @unique
+  name      String
+  metric    ExerciseMetric
+  muscle    String?
+  equipment Equipment?
+  userId    String?
+  user      User?          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt DateTime       @default(now())
+
+  routineItems CrossfitRoutineItem[]
+  sets         CrossfitSet[]
+
+  @@index([userId])
+}
+
+model CrossfitRoutine {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name      String
+  notes     String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  items    CrossfitRoutineItem[]
+  sessions CrossfitSession[]
+
+  @@index([userId])
+}
+
+// Ejercicio planificado dentro de una rutina: número de series y objetivo por serie (opcional).
+model CrossfitRoutineItem {
+  id         String           @id @default(cuid())
+  routineId  String
+  routine    CrossfitRoutine  @relation(fields: [routineId], references: [id], onDelete: Cascade)
+  exerciseId String
+  exercise   CrossfitExercise @relation(fields: [exerciseId], references: [id], onDelete: Cascade)
+  position   Int
+  sets       Int
+  reps       Int?
+  weightKg   Float?
+  seconds    Int?
+  meters     Int?
+  calories   Int?
+
+  @@index([routineId])
+}
+
+model CrossfitSession {
+  id        String           @id @default(cuid())
+  userId    String
+  user      User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  routineId String?
+  routine   CrossfitRoutine? @relation(fields: [routineId], references: [id], onDelete: SetNull)
+  date      DateTime         @db.Date
+  notes     String?
+  createdAt DateTime         @default(now())
+
+  sets CrossfitSet[]
+
+  @@index([userId, date])
+}
+
+// Serie registrada. El dueño es el de la sesión (sin userId propio).
+model CrossfitSet {
+  id         String           @id @default(cuid())
+  sessionId  String
+  session    CrossfitSession  @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  exerciseId String
+  exercise   CrossfitExercise @relation(fields: [exerciseId], references: [id], onDelete: Cascade)
+  reps       Int?
+  weightKg   Float?
+  seconds    Int?
+  meters     Int?
+  calories   Int?
+
+  createdAt DateTime @default(now())
+
+  @@index([sessionId])
+  @@index([exerciseId])
+}
